@@ -1,0 +1,8 @@
+{
+    "size"  : 10,
+    "sites" : "sites.vasp",
+    "sublattices" : {
+        "A" : { "Li" : 6, "Ni" : 4, "Sb" : 4 },
+        "B" : { "O"  : 20}
+    }
+}
