@@ -8,28 +8,44 @@ __author__ = "Alexander Urban"
 __date__   = "2014-03-03"
 
 import json
+import hashlib
 import numpy as np
 from pymatgen.io.vaspio import Poscar
 
-class Sublattice(object):
+class Serializable(object):
 
-    name  = ''
-    sites = []
-    occupation = {}
+    def to_JSON(self):
+        def serialize(o):
+            if hasattr(o, '__dict__'):
+                return o.__dict__
+            else:
+                try:
+                    return o.tolist()
+                except:
+                    return o
+        return json.dumps(self, default=serialize, sort_keys=True, indent=4)
 
-    def __init__(self, name, occupation, site_coords):
+    @classmethod
+    def from_JSON(cls, json_string):
+        o = cls()
+        o.__dict__.update(json.loads(json_string))
+        return o
+
+class Sublattice(Serializable):
+
+    def __init__(self, name, occupation, site_index):
         """
         Arguments:
           name (str)           name of the sublattice ('A', 'B', ...)
           occupation (dict)    atom counts for each species, e.g.
                                {'Li' : 4, 'Co' : 4, 'O' : 8}
-          site_coords (array)  fractional coordinates of all sites in
-                               a 2-d array
+          site_index (list)    Boolean site index that selects only those sites
+                               that belong to this sublattice (ndarray or list)
         """
 
         self.name = name
         self.occupation = occupation
-        self.sites = np.array(site_coords)
+        self.site_index = np.array(site_index)
 
     def __str__(self):
         s  = '\n Instance of Sublattice\n\n'
@@ -40,7 +56,7 @@ class Sublattice(object):
 
     @property
     def nsites(self):
-        return len(self.sites)
+        return np.sum(self.site_index)
 
     @property
     def natoms(self):
@@ -49,32 +65,42 @@ class Sublattice(object):
             nat += self.occupation[element]
         return nat
 
-class Trial(object):
+class Trial(Serializable):
 
-    decorations = []
-    types       = []
-
-    def __init__(self, decorations):
+    def __init__(self, decorations, types=None, fitness=None):
         """
         Arguments:
           decorations (list)  2-d list of atom types for each site
                               (use None for vacancies) and each sublattice
-
-          decorations[i][j] = atom type on j-th site of i-th sublattice
+                              i.e. decorations[i][j] = atom type on j-th site
+                                                       of i-th sublattice
+          types (list)        (optional) Alternatively the atom types can be
+                              passed as separate list.  In this case,
+                              DECORATIONS is assumed to be a list of integers
+                              that refer to the corresponding entry in the
+                              TYPES list
+          fitness (float)     (optional) Fitness of the trial, if known.
         """
 
-        nsub = len(decorations)
-        for i in range(nsub):
-            self.decorations.append(np.zeros(len(decorations[i]), dtype=int))
-            self.types.append(list(set(decorations[i])))
-            for j in range(len(decorations)):
-                if decorations[i][j] is None:
-                    self.decoration[i][j] = -1
-                else:
-                    self.decorations[i][j] = self.types.index(decorations[i][j])
+        if types is not None:
+            self.types = types
+            self.decorations = []
+            for deco in decorations:
+                self.decorations.append(np.array(deco))
+        else:
+            self.decorations = []
+            self.types       = []
+            nsub = len(decorations)
+            for i in range(nsub):
+                self.decorations.append(np.zeros(len(decorations[i]), dtype=int))
+                self.types.append(list(set(decorations[i])))
+                for j in range(len(decorations[i])):
+                    self.decorations[i][j] = self.types[i].index(decorations[i][j])
+
+        self.fitness = fitness
 
     @classmethod
-    def from_sublattice(cls, sublattices):
+    def from_sublattices(cls, sublattices):
         """
         Arguments:
           sublattices    list of instances of Sublattice
@@ -106,6 +132,9 @@ class Trial(object):
         s += (self.nsublattices*"%3d ") % tuple(self.natoms) + "\n"
         return s
 
+    def __repr__(self):
+        return '<{}(id={})>'.format(self.__class__.__name__, self.id)
+
     def __eq__(self, other):
         try:
             eq = True
@@ -126,6 +155,10 @@ class Trial(object):
         return NotImplemented
     def __le__(self, other):
         return NotImplemented
+
+    @property
+    def id(self):
+        return hashlib.md5(str(self.decorations)).hexdigest()
 
     @property
     def nsublattices(self):
@@ -149,21 +182,9 @@ class Trial(object):
         for i in range(self.nsublattices):
             np.random.shuffle(self.decorations[i])
 
-class Evolution(object):
+class Evolution(Serializable):
 
-    paramfile = ''
-
-    sitesfile = ''
-    avec = np.identity(3)
-    sites = []
-    site_types = []
-
-    sublattices = []
-    size = 0
-
-    trials = []
-
-    def __init__(self, paramfile):
+    def __init__(self, avec, sites, site_types):
         """
         Arguments:
           paramfile (str)   name of the parameter file in JSON format
@@ -180,30 +201,75 @@ class Evolution(object):
           }
         """
 
-        self.paramfile = paramfile
+        self.avec = np.array(avec)
+        self.sites = np.array(sites)
+        self.site_types = np.array(site_types)
+        self.sitesfile = None
+        self.paramfile = None
+
+        self.sublattices = []
+        self.trials = []
+
+    @classmethod
+    def from_parameter_file(cls, paramfile):
 
         with open(paramfile, 'r') as fp:
             params = json.load(fp)
 
-        self.size = params['size']
-        self.sitesfile = params['sites']
+        sitesfile = params['sites']
 
         # pymatgen specific:
-        struc = Poscar.from_file(self.sitesfile).structure
-        self.avec  = struc.lattice.matrix
-        self.sites = np.array(struc.frac_coords)
-        self.site_types = np.array([species.symbol for species in struc.species])
+        struc = Poscar.from_file(sitesfile).structure
+        avec  = struc.lattice.matrix
+        sites = np.array(struc.frac_coords)
+        site_types = np.array([species.symbol for species in struc.species])
 
-        self.sublattices = []
+        evo = cls(avec, sites, site_types)
+        evo.sitesfile = sitesfile
+        evo.paramfile = paramfile
+
         for name in params['sublattices']:
             occupation  = params['sublattices'][name]
-            site_coords = self.sites[self.site_types==name]
-            self.sublattices.append(Sublattice(name, occupation, site_coords))
+            site_index = (evo.site_types==name)
+            evo.add_sublattice(name, occupation, site_index)
+
+        size = params['size']
+        for i in range(size):
+            evo.trials.append(Trial.from_sublattices(evo.sublattices))
+
+        return evo
+
+    @classmethod
+    def from_JSON(cls, string_or_fp):
+
+        if isinstance(string_or_fp,file):
+            entries = json.load(string_or_fp)
+        else:
+            entries = json.loads(string_or_fp)
+
+        avec = np.array(entries['avec'])
+        sites = np.array(entries['sites'])
+        site_types = np.array(entries['site_types'])
+
+        evo = cls(avec, sites, site_types)
+        evo.sitesfile = entries['sitesfile']
+        evo.paramfile = entries['paramfile']
+
+        for sub in entries['sublattices']:
+            evo.add_sublattice(**sub)
+
+        for trial in entries['trials']:
+            evo.trials.append(Trial(**trial))
+
+        return evo
 
     def __str__(self):
         s  = "\n Instance of Evolution\n\n"
+        if self.paramfile is not None:
+            s += " Parameters from  : {}\n".format(self.paramfile)
+        if self.sitesfile is not None:
+            s += " Sites read from  : {}\n".format(self.sitesfile)
         s += " Population size  : {}\n".format(self.size)
-        s += " Sites read from  : {}\n".format(self.sitesfile)
         s += " Num. sublattices : {}\n".format(len(self.sublattices))
         for sub in self.sublattices:
             s += sub.__str__()
@@ -213,8 +279,51 @@ class Evolution(object):
     def nsublattices(self):
         return len(self.sublattices)
 
-    def create_initial_population(self):
+    @property
+    def size(self):
+        return len(self.trials)
+
+    @property
+    def unevaluated_trials(self):
+        return [trial for trial in self.trials if trial.fitness is None]
+
+    def update_parameters(self, paramfile):
         """
-        Randomly generate initial trial vectors
+        Update the algorithm parameters by re-parsing the parameter file.
+
+        Arguments:
+          paramfile (str)   path to the parameter file
         """
+
+        self.paramfile = paramfile
+
+        with open(paramfile, 'r') as fp:
+            params = json.load(fp)
+
+        sitesfile = params['sites']
+
+        if (self.sitesfile != sitesfile):
+            print "Warning: the name of the sites file has changed."
+            print "         The new file will be ignored!"
+
+        if (len(params['sublattices']) != self.nsublattices):
+            print "Warning: the number of sub-lattices in the input file has changed."
+            print "         This update will be ignored!"
+
+        # size = params['size']
+
+
+    def add_sublattice(self, name, occupation, site_index):
+        self.sublattices.append(Sublattice(name, occupation, site_index))
+
+    def write_unevaluated(self, dir='.', format='vasp'):
+        """
+        Write out structures of trials for whom the fitness has not
+        yet been evaluated.
+
+        Arguments:
+          dir (str)     path to ooutput directory
+          format (str)  atomic structure file format
+        """
+
         pass
