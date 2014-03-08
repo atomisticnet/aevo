@@ -7,10 +7,25 @@ Insert description here.
 __author__ = "Alexander Urban"
 __date__   = "2014-03-03"
 
+import sys
+import os
 import json
 import hashlib
 import numpy as np
+import pymatgen as mg
 from pymatgen.io.vaspio import Poscar
+
+class IncompatibleTrialsException(Exception):
+    pass
+
+class PopulationTooSmallException(Exception):
+    pass
+
+class TrialsNotEvaluatedException(Exception):
+    pass
+
+class NoNewTrialsException(Exception):
+    pass
 
 class Serializable(object):
 
@@ -137,12 +152,9 @@ class Trial(Serializable):
 
     def __eq__(self, other):
         try:
-            eq = True
-            for i in range(self.sublattices):
-                eq = eq and np.all(self.decorations[i] == other.decorations[i])
+            return self.id == other.id
         except:
-            eq = False
-        return eq
+            return False
 
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -169,6 +181,10 @@ class Trial(Serializable):
         return [len(self.decorations[i]) for i in range(self.nsublattices)]
 
     @property
+    def ntypes(self):
+        return [len(self.types[i]) for i in range(self.nsublattices)]
+
+    @property
     def nvacancies(self):
         return [np.sum(np.where(self.decorations[i]==-1, 1, 0))
                 for i in range(self.nsublattices)]
@@ -182,12 +198,158 @@ class Trial(Serializable):
         for i in range(self.nsublattices):
             np.random.shuffle(self.decorations[i])
 
+    def site_index(self, sublattice):
+        """
+        Boolean index to select only occupied sites on specified
+        sub-lattice.
+
+        Arguments:
+          sublattice (int)    ID of the sublattice
+        """
+
+        if None in self.types[sublattice]:
+            vacID = self.types[sublattice].index(None)
+        else:
+            vacID = -1
+        return np.where(self.decorations[sublattice] != vacID)
+
+    def site_types(self, sublattice):
+        """
+        Decoration of occupied sites, only.
+
+        Arguments:
+          sublattice (int)   ID of the sublattice
+        """
+
+        return [ self.types[sublattice][i] for i in
+                 self.decorations[sublattice][self.site_index(sublattice)] ]
+
+    def mutate(self, nsites):
+        """
+        Randomly swap NSITES pairs of sites.
+        """
+
+        for i in range(nsites):
+
+            # (1) randomly select one sublattice with more than one species
+            ntypes = 1
+            while (ntypes <= 1):
+                subl = np.random.randint(self.nsublattices)
+                ntypes = self.ntypes[subl]
+
+            # (2) randomly select two sites with different occupation
+            s1 = np.random.randint(self.nsites[subl])
+            s2 = s1
+            while (self.decorations[subl][s1] == self.decorations[subl][s2]):
+                s2 = np.random.randint(self.nsites[subl])
+
+            # (3) swap the types of these two sites
+            buff = self.decorations[subl][s1]
+            self.decorations[subl][s1] = self.decorations[subl][s2]
+            self.decorations[subl][s2] = buff
+
+    def cross(self, other):
+        """
+        Cross two trials to form a new one.
+
+        Arguments:
+          other (Trial)   the other trial
+
+        Returns:
+          a new instance of Trial
+        """
+
+        if not (self.nsites == other.nsites and
+                self.nsublattices == other.nsublattices and
+                self.ntypes == other.ntypes):
+            raise IncompatibleTrialsException
+
+        try:
+            # create index of type IDs
+            other2self = []
+            for sl in range(other.nsublattices):
+                other2self.append([])
+                for t in other.types[sl]:
+                    other2self[sl].append(self.types[sl].index(t))
+        except:
+            raise IncompatibleTrialsException
+
+        """
+        Crossing algorithm
+
+        trial 1:  [ 1 | 0 | 2 | 1 | 1 | 0 | 2 ]
+                    ^       ^   ^       ^
+        trial 2:  [ 0 | 1 | 2 | 1 | 2 | 1 | 0 ]
+                        ^           ^       ^
+        combined: [ 1 | 0 | 2 | 1 | 2 | 0 | 0 ]
+        --> one 0 too many, one 1 too few
+            replace one 0 with a 1 to fix stoichiometry
+
+        result:   [ 1 | 0 | 2 | 1 | 2 | 0 | 1 ]
+        """
+
+        # (1) start with copy of trial 1
+        offspring = Trial(self.decorations, types=self.types)
+
+        # (2) replace roughly half of occupations with trial 2
+        for sl in range(self.nsublattices):
+            for i in range(self.nsites[sl]):
+                r = np.random.random()
+                if (r>0.5): # = 50% probability
+                    site_type = other2self[sl][other.decorations[sl][i]]
+                    offspring.decorations[sl][i] = site_type
+
+        # (3) fix the stoichiometry
+        for sl in range(self.nsublattices):
+            diff = []
+            required = []
+            for i in range(self.ntypes[sl]):
+                n1 = np.sum(self.decorations[sl] == i)
+                n2 = np.sum(offspring.decorations[sl] == i)
+                diff.append(n2-n1)
+                if (n1-n2>0):
+                    required += (n1-n2)*[i]
+            for i in range(self.ntypes[sl]):
+                for j in range(diff[i]):
+                    sites_i = np.arange(offspring.nsites[sl]
+                              )[offspring.decorations[sl] == i]
+                    r1 = np.random.randint(len(sites_i))
+                    sel = sites_i[r1]
+                    r2 = np.random.randint(len(required))
+                    offspring.decorations[sl][sel] = required.pop(r2)
+
+        return offspring
+
+
 class Evolution(Serializable):
 
-    def __init__(self, avec, sites, site_types):
+    def __init__(self, avec, sites, site_types, size, generation=0):
         """
         Arguments:
-          paramfile (str)   name of the parameter file in JSON format
+          avec (2d array/list)   lattice vectors
+          sites (2d array/list)  fractional site coordinates
+          site_types (list)      list of sublattice types
+          size (int)             number of trials per generation
+          generation (int)       generation of the evolutionary algorithm
+        """
+
+        self.avec = np.array(avec)
+        self.sites = np.array(sites)
+        self.site_types = np.array(site_types)
+        self.size = size
+        self.generation = generation
+        self.sitesfile = None
+        self.paramfile = None
+
+        self.sublattices = []
+        self.trials = []
+        self.fitness_history = {}
+
+    @classmethod
+    def from_parameter_file(cls, paramfile):
+        """
+        Arguments:
+          paramfile (str)   path to parameter file
 
         Sample parameter file:
 
@@ -201,18 +363,6 @@ class Evolution(Serializable):
           }
         """
 
-        self.avec = np.array(avec)
-        self.sites = np.array(sites)
-        self.site_types = np.array(site_types)
-        self.sitesfile = None
-        self.paramfile = None
-
-        self.sublattices = []
-        self.trials = []
-
-    @classmethod
-    def from_parameter_file(cls, paramfile):
-
         with open(paramfile, 'r') as fp:
             params = json.load(fp)
 
@@ -223,8 +373,9 @@ class Evolution(Serializable):
         avec  = struc.lattice.matrix
         sites = np.array(struc.frac_coords)
         site_types = np.array([species.symbol for species in struc.species])
+        size = params['size']
 
-        evo = cls(avec, sites, site_types)
+        evo = cls(avec, sites, site_types, size)
         evo.sitesfile = sitesfile
         evo.paramfile = paramfile
 
@@ -233,9 +384,10 @@ class Evolution(Serializable):
             site_index = (evo.site_types==name)
             evo.add_sublattice(name, occupation, site_index)
 
-        size = params['size']
         for i in range(size):
             evo.trials.append(Trial.from_sublattices(evo.sublattices))
+
+        evo.set_algorithm_parameters(params)
 
         return evo
 
@@ -250,10 +402,12 @@ class Evolution(Serializable):
         avec = np.array(entries['avec'])
         sites = np.array(entries['sites'])
         site_types = np.array(entries['site_types'])
+        size = entries['size']
 
-        evo = cls(avec, sites, site_types)
+        evo = cls(avec, sites, site_types, size, generation=entries['generation'])
         evo.sitesfile = entries['sitesfile']
         evo.paramfile = entries['paramfile']
+        evo.fitness_history = entries['fitness_history']
 
         for sub in entries['sublattices']:
             evo.add_sublattice(**sub)
@@ -269,7 +423,8 @@ class Evolution(Serializable):
             s += " Parameters from  : {}\n".format(self.paramfile)
         if self.sitesfile is not None:
             s += " Sites read from  : {}\n".format(self.sitesfile)
-        s += " Population size  : {}\n".format(self.size)
+        s += " Population size  : {}\n".format(self.ntrials)
+        s += " Generation size  : {}\n".format(self.size)
         s += " Num. sublattices : {}\n".format(len(self.sublattices))
         for sub in self.sublattices:
             s += sub.__str__()
@@ -280,22 +435,43 @@ class Evolution(Serializable):
         return len(self.sublattices)
 
     @property
-    def size(self):
+    def nsites(self):
+        return len(self.sites)
+
+    @property
+    def ntrials(self):
         return len(self.trials)
 
     @property
     def unevaluated_trials(self):
         return [trial for trial in self.trials if trial.fitness is None]
 
+    @property
+    def evaluated_trials(self):
+        return [trial for trial in self.trials if trial.fitness is not None]
+
+    @property
+    def average_fitness(self):
+        fitness = [trial.fitness for trial in self.evaluated_trials]
+        return np.sum(fitness)/len(fitness)
+
+    @property
+    def min_fitness(self):
+        fitness = [trial.fitness for trial in self.evaluated_trials]
+        return np.min(fitness)
+
+    @property
+    def max_fitness(self):
+        fitness = [trial.fitness for trial in self.evaluated_trials]
+        return np.max(fitness)
+
     def update_parameters(self, paramfile):
         """
         Update the algorithm parameters by re-parsing the parameter file.
 
         Arguments:
-          paramfile (str)   path to the parameter file
+          paramfile (str)  path to the parameter file
         """
-
-        self.paramfile = paramfile
 
         with open(paramfile, 'r') as fp:
             params = json.load(fp)
@@ -310,20 +486,233 @@ class Evolution(Serializable):
             print "Warning: the number of sub-lattices in the input file has changed."
             print "         This update will be ignored!"
 
-        # size = params['size']
+        self.paramfile = paramfile
 
+        self.set_algorithm_parameters(params)
+
+    def set_algorithm_parameters(self, params):
+        """
+        Set parameters of the evolutionary algorithm.
+
+        Arguments:
+          params (dict)  dictionary with parameters, e.g., from
+                         JSON file
+        """
+
+        self.size = params['size']
+        self.keep = params['keep']
+        self.mutate = params['mutate']
 
     def add_sublattice(self, name, occupation, site_index):
         self.sublattices.append(Sublattice(name, occupation, site_index))
 
-    def write_unevaluated(self, dir='.', format='vasp'):
+    def trial_coords(self, trial, sort=True):
+        """
+        Get site coordinates and decoration of given trial.
+
+        Arguments:
+          trial (Trial)
+
+        Returns:
+          tuple (coords, types) with ndarrays.
+        """
+
+        coords = []
+        types = []
+        for i in range(self.nsublattices):
+            idx = self.sublattices[i].site_index
+            coo = self.sites[idx]
+            coo = coo[trial.site_index(i)]
+            coords += list(coo)
+            types  += list(trial.site_types(i))
+        coords = np.array(coords)
+        types  = np.array(types)
+
+        if sort:
+            idx = np.argsort(types)
+            coords = coords[idx]
+            types = types[idx]
+
+        return (coords, types)
+
+    def write_trial(self, trial, directory='.', frmt='vasp'):
+        """
+        Save atomic structure of a trial.
+
+        Arguments:
+          trial (Trial)
+          directory (str) path to ooutput directory
+          frmt (str)      atomic structure file format
+        """
+
+        if frmt != 'vasp':
+            sys.stderr.write("Error: only VASP format implemented\n")
+            raise NotImplementedError
+
+        (coords, types) = self.trial_coords(trial)
+
+        filename = directory + os.sep + 'POSCAR-{}.vasp'.format(trial.id)
+        print "   writing file: {}".format(filename)
+
+        # pymatgen specific
+        s = mg.Structure(lattice=self.avec, species=types, coords=coords)
+        p = Poscar(structure=s)
+        p.write_file(filename)
+
+    def write_unevaluated(self, directory=None, frmt='vasp'):
         """
         Write out structures of trials for whom the fitness has not
         yet been evaluated.
 
         Arguments:
-          dir (str)     path to ooutput directory
-          format (str)  atomic structure file format
+          directory (str)   path to ooutput directory
+          frmt (str)        atomic structure file format
         """
 
-        pass
+        print " Writing non-evaluated trial structures to files."
+        print
+
+        if directory is None:
+            directory = 'generation{:05d}'.format(self.generation)
+
+        # fixme: (1) could be file, not dir (2) racing condition
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        for trial in self.unevaluated_trials:
+            self.write_trial(trial, directory=directory, frmt=frmt)
+
+        print
+
+    def read_fitness(self, directory=None):
+        """
+        Read fitness values of current trials from files.
+
+        Arguments:
+          directory (str)   path to directory with FITNESS files
+        """
+
+        print " Reading fitness values."
+        print
+
+        if directory is None:
+            directory = 'generation{:05d}'.format(self.generation)
+
+        for trial in self.unevaluated_trials:
+            filename = directory + os.sep + 'FITNESS.' + trial.id
+            if os.path.exists(filename):
+                print "   reading file: {}".format(filename)
+                with open(filename, 'r') as fp:
+                    trial.fitness = float(fp.readline())
+            else:
+                print "   file not found: {}".format(filename)
+
+        print
+
+    def select(self, keep=None):
+        """
+        Select trials for the next generation.
+
+        Arguments:
+          n (int)       Number of trials to be selected.
+          keep (int)    Number of current best trials to keep in
+                        the next generation.  Further trials will
+                        be selected probabilistically.
+        """
+
+        if keep is None:
+            keep = self.keep
+
+        # check if population is large enough
+        if (self.ntrials < self.size):
+            raise PopulationTooSmallException
+
+        # check if all trials have been evaluated
+        if (len(self.unevaluated_trials) > 0):
+            raise TrialsNotEvaluatedException
+
+        self.generation += 1
+
+        if (self.ntrials == self.size):
+            # no selection required
+            return
+
+        keep = min(keep, self.size)
+        new_population = []
+
+        fitness = [trial.fitness for trial in self.trials]
+        rank = np.argsort(fitness)
+        for i in range(keep):
+            new_population.append(self.trials[rank[i]])
+        for i in range(keep):
+            self.trials.remove(new_population[i])
+
+        # Roulette Wheel selection of further trials
+        while(self.size > len(new_population)):
+            # (1) score each remaining trial proportionally to its fitness
+            fitness = [trial.fitness for trial in self.trials]
+            rank = np.argsort(fitness)
+            fit_min = fitness[rank[0]]   # best
+            fit_max = fitness[rank[-1]]  # worst
+            score = [fit_max - fit_min]
+            for i in range(1,self.ntrials):
+                score.append(fit_max - self.trials[i].fitness + score[i-1])
+            # (2) select trials
+            r = np.random.random()*score[-1]
+            i = 0
+            while(score[i] < r):
+                i += 1
+            new_population.append(self.trials.pop(i))
+
+        # delete un-selected trials, but archive their fitness values
+        for trial in self.trials:
+            self.fitness_history[trial.id] = trial.fitness
+            self.trials.remove(trial)
+
+        self.trials = new_population
+
+    def mate(self, mutate=None):
+        """
+        Combine the trials of the current generation to generate the
+        next generation of trials.
+
+        Arguments:
+          mutate (int)   number of sites to mutate
+        """
+
+        if mutate is None:
+            mutate = self.mutate
+
+        mutate = min(self.nsites, mutate)
+
+        # check if population is large enough
+        if (self.ntrials < self.size):
+            raise PopulationTooSmallException
+
+        # check if all trials have been evaluated
+        if (len(self.unevaluated_trials) > 0):
+            raise TrialsNotEvaluatedException
+
+        new_generation = []
+        ntry = 0
+        ntry_max = 100
+        while (len(new_generation) < self.size):
+            # (1) select 2 trials from current generation
+            t1 = np.random.randint(self.ntrials)
+            t2 = np.random.randint(self.ntrials - 1)
+            if (t2 >= t1):
+                t2 += 1
+            # (2) cross these two
+            trial = self.trials[t1].cross(self.trials[t2])
+            # (3) introduce mutations
+            trial.mutate(mutate)
+            # (4) add to new generation, if the trial is truely new
+            if not trial.id in self.fitness_history:
+                new_generation.append(trial)
+                ntry = 0
+            else:
+                ntry += 1
+            if (ntry > ntry_max):
+                raise NoNewTrialsException
+
+        self.trials.extend(new_generation)
