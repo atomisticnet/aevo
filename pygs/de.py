@@ -443,6 +443,12 @@ class Evolution(Serializable):
         return len(self.trials)
 
     @property
+    def best_trial(self):
+        fitness = [trial.fitness for trial in self.evaluated_trials]
+        idx = np.argsort(fitness)
+        return trial[idx[0]]
+
+    @property
     def unevaluated_trials(self):
         return [trial for trial in self.trials if trial.fitness is None]
 
@@ -535,12 +541,13 @@ class Evolution(Serializable):
 
         return (coords, types)
 
-    def write_trial(self, trial, directory='.', frmt='vasp'):
+    def write_trial(self, trial, filename=None, directory='.', frmt='vasp'):
         """
         Save atomic structure of a trial.
 
         Arguments:
           trial (Trial)
+          filename (str)  name of the output file
           directory (str) path to ooutput directory
           frmt (str)      atomic structure file format
         """
@@ -551,7 +558,8 @@ class Evolution(Serializable):
 
         (coords, types) = self.trial_coords(trial)
 
-        filename = directory + os.sep + 'POSCAR-{}.vasp'.format(trial.id)
+        if filename is None:
+            filename = directory + os.sep + 'POSCAR-{}.vasp'.format(trial.id)
         print "   writing file: {}".format(filename)
 
         # pymatgen specific
@@ -565,7 +573,7 @@ class Evolution(Serializable):
         yet been evaluated.
 
         Arguments:
-          directory (str)   path to ooutput directory
+          directory (str)   path to output directory
           frmt (str)        atomic structure file format
         """
 
@@ -581,6 +589,27 @@ class Evolution(Serializable):
 
         for trial in self.unevaluated_trials:
             self.write_trial(trial, directory=directory, frmt=frmt)
+
+        print
+
+    def write_current_best(self, filename, directory='.', frmt='vasp'):
+        """
+        Write out structures of the current best trial.
+
+        Arguments:
+          filename (str)    path to the output file
+          directory (str)   path to output directory
+          frmt (str)        atomic structure file format
+        """
+
+        print " Saving current best trial structures to file."
+        print
+
+        # fixme: (1) could be file, not dir (2) racing condition
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        self.write_trial(self.best_trial, directory=directory, frmt=frmt)
 
         print
 

@@ -38,6 +38,7 @@ def find_groundstate(infile, statefile=None, outdir=None):
         print
         ga.mate()
         ga.write_unevaluated(directory=outdir)
+        ga.write_current_best('current_best.vasp')
 
     print " Saving state to: {}".format(statefile)
     with open(statefile, 'w') as fp:

@@ -8,7 +8,7 @@ else
   gen=0
 fi
 
-for i in $(seq $gen 200)
+for i in $(seq $gen 500)
 do
 
   echo -n "Running generation ${i} ... "
