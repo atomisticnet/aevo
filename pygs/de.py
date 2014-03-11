@@ -320,7 +320,6 @@ class Trial(Serializable):
 
         return offspring
 
-
 class Evolution(Serializable):
 
     def __init__(self, avec, sites, site_types, size, generation=0):
@@ -446,7 +445,7 @@ class Evolution(Serializable):
     def best_trial(self):
         fitness = [trial.fitness for trial in self.evaluated_trials]
         idx = np.argsort(fitness)
-        return trial[idx[0]]
+        return self.trials[idx[0]]
 
     @property
     def unevaluated_trials(self):
@@ -609,7 +608,8 @@ class Evolution(Serializable):
         if not os.path.exists(directory):
             os.makedirs(directory)
 
-        self.write_trial(self.best_trial, directory=directory, frmt=frmt)
+        self.write_trial(self.best_trial, filename=filename,
+                         directory=directory, frmt=frmt)
 
         print
 
