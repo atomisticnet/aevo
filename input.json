@@ -3,6 +3,7 @@
     "keep"   : 5,
     "mutate" : 1,
     "sites"  : "sites.vasp",
+    "atom_types" : [ "Li", "Ni", "Sb", "O" ],
     "sublattices" : {
         "A" : { "Li" : 6, "Ni" : 4, "Sb" : 4 },
         "B" : { "O"  : 20}

@@ -322,12 +322,13 @@ class Trial(Serializable):
 
 class Evolution(Serializable):
 
-    def __init__(self, avec, sites, site_types, size, generation=0):
+    def __init__(self, avec, sites, site_types, atom_types, size, generation=0):
         """
         Arguments:
           avec (2d array/list)   lattice vectors
           sites (2d array/list)  fractional site coordinates
           site_types (list)      list of sublattice types
+          atom_types (list)      list of atomic species (determines order)
           size (int)             number of trials per generation
           generation (int)       generation of the evolutionary algorithm
         """
@@ -335,6 +336,7 @@ class Evolution(Serializable):
         self.avec = np.array(avec)
         self.sites = np.array(sites)
         self.site_types = np.array(site_types)
+        self.atom_types = atom_types
         self.size = size
         self.generation = generation
         self.sitesfile = None
@@ -366,6 +368,7 @@ class Evolution(Serializable):
             params = json.load(fp)
 
         sitesfile = params['sites']
+        atom_types = params['atom_types']
 
         # pymatgen specific:
         struc = Poscar.from_file(sitesfile).structure
@@ -374,7 +377,7 @@ class Evolution(Serializable):
         site_types = np.array([species.symbol for species in struc.species])
         size = params['size']
 
-        evo = cls(avec, sites, site_types, size)
+        evo = cls(avec, sites, site_types, atom_types, size)
         evo.sitesfile = sitesfile
         evo.paramfile = paramfile
 
@@ -401,9 +404,12 @@ class Evolution(Serializable):
         avec = np.array(entries['avec'])
         sites = np.array(entries['sites'])
         site_types = np.array(entries['site_types'])
+        atom_types = entries['atom_types']
         size = entries['size']
+        generation = entries['generation']
 
-        evo = cls(avec, sites, site_types, size, generation=entries['generation'])
+        evo = cls(avec, sites, site_types, atom_types,
+                  size, generation=generation)
         evo.sitesfile = entries['sitesfile']
         evo.paramfile = entries['paramfile']
         evo.fitness_history = entries['fitness_history']
@@ -470,6 +476,13 @@ class Evolution(Serializable):
         fitness = [trial.fitness for trial in self.evaluated_trials]
         return np.max(fitness)
 
+    def top_N(self, N):
+        """
+        Return list of tuples (ID, fitness) of the N best trials found so far.
+        """
+        return [(t, self.fitness_history[t]) for t in
+                sorted(self.fitness_history, key=self.fitness_history.get)[0:N]]
+
     def update_parameters(self, paramfile):
         """
         Update the algorithm parameters by re-parsing the parameter file.
@@ -534,9 +547,14 @@ class Evolution(Serializable):
         types  = np.array(types)
 
         if sort:
-            idx = np.argsort(types)
-            coords = coords[idx]
-            types = types[idx]
+            coords_sorted = []
+            types_sorted = []
+            for t in self.atom_types:
+                idx = (types == t)
+                coords_sorted.extend(coords[idx])
+                types_sorted.extend(types[idx])
+            coords = np.array(coords_sorted)
+            types = np.array(types_sorted)
 
         return (coords, types)
 
@@ -633,6 +651,7 @@ class Evolution(Serializable):
                 print "   reading file: {}".format(filename)
                 with open(filename, 'r') as fp:
                     trial.fitness = float(fp.readline())
+                self.fitness_history[trial.id] = trial.fitness
             else:
                 print "   file not found: {}".format(filename)
 
@@ -693,9 +712,8 @@ class Evolution(Serializable):
                 i += 1
             new_population.append(self.trials.pop(i))
 
-        # delete un-selected trials, but archive their fitness values
+        # delete un-selected trials
         for trial in self.trials:
-            self.fitness_history[trial.id] = trial.fitness
             self.trials.remove(trial)
 
         self.trials = new_population
