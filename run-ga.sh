@@ -1,5 +1,9 @@
 #!/bin/bash
 
+final=0
+
+#----------------------------------------------------------------------#
+
 if [[ -f state.json ]]
 then
   gen=$(grep generation state.json | sed 's/^.*: \([0-9]*\),/\1/g')
@@ -8,7 +12,7 @@ else
   gen=0
 fi
 
-for i in $(seq $gen 500)
+for i in $(seq $gen $final)
 do
 
   echo -n "Running generation ${i} ... "

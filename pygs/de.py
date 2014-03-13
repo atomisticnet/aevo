@@ -370,11 +370,12 @@ class Evolution(Serializable):
         sitesfile = params['sites']
         atom_types = params['atom_types']
 
-        # pymatgen specific:
+        # pymatgen specific
         struc = Poscar.from_file(sitesfile).structure
         avec  = struc.lattice.matrix
         sites = np.array(struc.frac_coords)
         site_types = np.array([species.symbol for species in struc.species])
+
         size = params['size']
 
         evo = cls(avec, sites, site_types, atom_types, size)
@@ -386,7 +387,20 @@ class Evolution(Serializable):
             site_index = (evo.site_types==name)
             evo.add_sublattice(name, occupation, site_index)
 
-        for i in range(size):
+        if 'initial_population' in params:
+            for filename in params['initial_population']:
+                print " Adding trial structure from file: {}".format(filename)
+                # pymatgen specific
+                struc = Poscar.from_file(filename).structure
+                avec  = struc.lattice.matrix
+                sites = np.array(struc.frac_coords)
+                types = np.array([species.symbol for species in struc.species])
+                evo.add_trial(avec, sites, types)
+                if (evo.ntrials >= size):
+                    break
+            print
+
+        for i in range(size-evo.ntrials):
             evo.trials.append(Trial.from_sublattices(evo.sublattices))
 
         evo.set_algorithm_parameters(params)
@@ -476,6 +490,14 @@ class Evolution(Serializable):
         fitness = [trial.fitness for trial in self.evaluated_trials]
         return np.max(fitness)
 
+
+    def sublattice_of_site(self, isite):
+        """
+        Return sublattice ID of site ISITE.
+        """
+        return [i for i in range(self.nsublattices)
+                if self.sublattice[i].name == self.site_types[isite]][0]
+
     def top_N(self, N):
         """
         Return list of tuples (ID, fitness) of the N best trials found so far.
@@ -523,6 +545,52 @@ class Evolution(Serializable):
 
     def add_sublattice(self, name, occupation, site_index):
         self.sublattices.append(Sublattice(name, occupation, site_index))
+
+    def add_trial(self, avec, sites, types):
+        """
+        Add a trial structure to the current population.
+
+        Arguments:
+          avec (2-d array)    lattice vectors
+          sites (2d array)    site coordinates
+          types (list)        list of types of all sites (species)
+        """
+
+        # For now the lattice vectors are ignored, and it is assumed
+        # that a compatible lattice is used.  No check here, to allow
+        # for small cell relaxations.
+
+        decorations = []
+        for subl in self.sublattices:
+            decorations.append(subl.nsites*[None])
+
+        for i1 in range(len(sites)):
+            s1 = sites[i1]
+            d_min  = np.linalg.norm(self.avec[0])
+            d_min += np.linalg.norm(self.avec[1])
+            d_min += np.linalg.norm(self.avec[2])
+            isub_min = -1
+            i2_min = -1
+            for isub in range(self.nsublattices):
+                subl = self.sublattices[isub]
+                for i2 in range(subl.nsites):
+                    s2 = self.sites[subl.site_index][i2]
+                    d = np.linalg.norm(s2 - s1)
+                    if (d < d_min):
+                        d_min = d
+                        isub_min = isub
+                        i2_min = i2
+            if (isub_min >= 0) and (i2_min >= 0):
+                if decorations[isub_min][i2_min] is None:
+                    decorations[isub_min][i2_min] = types[i1]
+                else:
+                    sys.stderr.write("Error: overlapping sites detected.\n")
+                    raise IncompatibleTrialsException
+            else:
+                sys.stderr.write("Error: incompatible trial structure skipped.\n")
+                raise IncompatibleTrialsException
+
+        self.trials.append(Trial(decorations))
 
     def trial_coords(self, trial, sort=True):
         """
