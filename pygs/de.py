@@ -224,29 +224,34 @@ class Trial(Serializable):
         return [ self.types[sublattice][i] for i in
                  self.decorations[sublattice][self.site_index(sublattice)] ]
 
-    def mutate(self, nsites):
+    def mutate(self, mutation_rate):
         """
-        Randomly swap NSITES pairs of sites.
+        Randomly swap pairs of sites.
+
+        Argument:
+          mutation_rate (float)   mutation probability (0 <= x <= 1) for
+                                  each site
         """
 
-        for i in range(nsites):
+        for isub in range(self.nsublattices):
+            # only consider sublattices with more than one species
+            if self.ntypes[isub] <= 1:
+                continue
+            for s1 in range(self.nsites[isub]):
+                r = np.random.random()
+                # since we always swap pairs of sites, the actual
+                # probability has to be mutation_rate/2
+                if r < 0.5*mutation_rate:
+                    s2 = s1
+                    # pick a second site with different species
+                    while (self.decorations[isub][s1]
+                           == self.decorations[isub][s2]):
+                        s2 = np.random.randint(self.nsites[isub])
 
-            # (1) randomly select one sublattice with more than one species
-            ntypes = 1
-            while (ntypes <= 1):
-                subl = np.random.randint(self.nsublattices)
-                ntypes = self.ntypes[subl]
-
-            # (2) randomly select two sites with different occupation
-            s1 = np.random.randint(self.nsites[subl])
-            s2 = s1
-            while (self.decorations[subl][s1] == self.decorations[subl][s2]):
-                s2 = np.random.randint(self.nsites[subl])
-
-            # (3) swap the types of these two sites
-            buff = self.decorations[subl][s1]
-            self.decorations[subl][s1] = self.decorations[subl][s2]
-            self.decorations[subl][s2] = buff
+                    # swap the types of the two sites
+                    buff = self.decorations[isub][s1]
+                    self.decorations[isub][s1] = self.decorations[isub][s2]
+                    self.decorations[isub][s2] = buff
 
     def cross(self, other):
         """
@@ -792,7 +797,7 @@ class Evolution(Serializable):
         next generation of trials.
 
         Arguments:
-          mutate (int)   number of sites to mutate
+          mutate (float in [0.0,1.0])   mutation probability
         """
 
         if mutate is None:
@@ -806,6 +811,8 @@ class Evolution(Serializable):
 
         # check if all trials have been evaluated
         if (len(self.unevaluated_trials) > 0):
+            sys.stderr.write("Error: not all trials evaluated."
+                             "  Can not create new population.")
             raise TrialsNotEvaluatedException
 
         new_generation = []
@@ -822,7 +829,8 @@ class Evolution(Serializable):
             # (3) introduce mutations
             trial.mutate(mutate)
             # (4) add to new generation, if the trial is truely new
-            if not trial.id in self.fitness_history:
+            if ((trial.id not in self.fitness_history) and
+                (trial.id not in [t.id for t in new_generation])):
                 new_generation.append(trial)
                 ntry = 0
             else:
