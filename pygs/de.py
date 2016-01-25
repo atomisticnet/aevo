@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 
 """
-Insert description here.
-"""
+Differential Evolution
 
-__author__ = "Alexander Urban"
-__date__   = "2014-03-03"
+An implementation of the differential evolution algorithm [1] to
+identify near-ground-state atomic orderings.
+
+[1] R. Storn and K. Price, J. Global Optim. 11 (1997) 341–359.
+
+"""
 
 import sys
 import os
@@ -13,19 +16,27 @@ import json
 import hashlib
 import numpy as np
 import pymatgen as mg
-from pymatgen.io.vaspio import Poscar
+from pymatgen.io.vasp.inputs import Poscar
+
+__author__ = "Alexander Urban"
+__date__ = "2014-03-03"
+
 
 class IncompatibleTrialsException(Exception):
     pass
 
+
 class PopulationTooSmallException(Exception):
     pass
+
 
 class TrialsNotEvaluatedException(Exception):
     pass
 
+
 class NoNewTrialsException(Exception):
     pass
+
 
 class Serializable(object):
 
@@ -46,6 +57,7 @@ class Serializable(object):
         o.__dict__.update(json.loads(json_string))
         return o
 
+
 class Sublattice(Serializable):
 
     def __init__(self, name, occupation, site_index):
@@ -63,7 +75,7 @@ class Sublattice(Serializable):
         self.site_index = np.array(site_index)
 
     def __str__(self):
-        s  = '\n Instance of Sublattice\n\n'
+        s = '\n Instance of Sublattice\n\n'
         s += ' Number of sites : {}\n'.format(self.nsites)
         s += ' Number of atoms : {}\n'.format(self.natoms)
         s += ' Occupation      : ' + str(self.occupation) + '\n'
@@ -79,6 +91,7 @@ class Sublattice(Serializable):
         for element in self.occupation:
             nat += self.occupation[element]
         return nat
+
 
 class Trial(Serializable):
 
@@ -104,13 +117,15 @@ class Trial(Serializable):
                 self.decorations.append(np.array(deco))
         else:
             self.decorations = []
-            self.types       = []
+            self.types = []
             nsub = len(decorations)
             for i in range(nsub):
-                self.decorations.append(np.zeros(len(decorations[i]), dtype=int))
+                self.decorations.append(
+                    np.zeros(len(decorations[i]), dtype=int))
                 self.types.append(list(set(decorations[i])))
                 for j in range(len(decorations[i])):
-                    self.decorations[i][j] = self.types[i].index(decorations[i][j])
+                    self.decorations[i][j] = self.types[i].index(
+                        decorations[i][j])
 
         self.fitness = fitness
 
@@ -139,7 +154,7 @@ class Trial(Serializable):
         return trial
 
     def __str__(self):
-        s  = "\n Instance of Trial\n\n"
+        s = "\n Instance of Trial\n\n"
         s += " Sublattices      : {}\n".format(self.nsublattices)
         s += " Number of sites  : "
         s += (self.nsublattices*"%3d ") % tuple(self.nsites) + "\n"
@@ -161,10 +176,13 @@ class Trial(Serializable):
 
     def __gt__(self, other):
         return NotImplemented
+
     def __lt__(self, other):
         return NotImplemented
+
     def __ge__(self, other):
         return NotImplemented
+
     def __le__(self, other):
         return NotImplemented
 
@@ -186,7 +204,7 @@ class Trial(Serializable):
 
     @property
     def nvacancies(self):
-        return [np.sum(np.where(self.decorations[i]==-1, 1, 0))
+        return [np.sum(np.where(self.decorations[i] == -1, 1, 0))
                 for i in range(self.nsublattices)]
 
     @property
@@ -221,8 +239,8 @@ class Trial(Serializable):
           sublattice (int)   ID of the sublattice
         """
 
-        return [ self.types[sublattice][i] for i in
-                 self.decorations[sublattice][self.site_index(sublattice)] ]
+        return [self.types[sublattice][i] for i in
+                self.decorations[sublattice][self.site_index(sublattice)]]
 
     def mutate(self, mutation_rate):
         """
@@ -244,8 +262,8 @@ class Trial(Serializable):
                 if r < 0.5*mutation_rate:
                     s2 = s1
                     # pick a second site with different species
-                    while (self.decorations[isub][s1]
-                           == self.decorations[isub][s2]):
+                    while (self.decorations[isub][s1] ==
+                           self.decorations[isub][s2]):
                         s2 = np.random.randint(self.nsites[isub])
 
                     # swap the types of the two sites
@@ -300,7 +318,7 @@ class Trial(Serializable):
         for sl in range(self.nsublattices):
             for i in range(self.nsites[sl]):
                 r = np.random.random()
-                if (r>0.5): # = 50% probability
+                if (r > 0.5):  # = 50% probability
                     site_type = other2self[sl][other.decorations[sl][i]]
                     offspring.decorations[sl][i] = site_type
 
@@ -312,12 +330,12 @@ class Trial(Serializable):
                 n1 = np.sum(self.decorations[sl] == i)
                 n2 = np.sum(offspring.decorations[sl] == i)
                 diff.append(n2-n1)
-                if (n1-n2>0):
+                if (n1 - n2 > 0):
                     required += (n1-n2)*[i]
             for i in range(self.ntypes[sl]):
                 for j in range(diff[i]):
                     sites_i = np.arange(offspring.nsites[sl]
-                              )[offspring.decorations[sl] == i]
+                                        )[offspring.decorations[sl] == i]
                     r1 = np.random.randint(len(sites_i))
                     sel = sites_i[r1]
                     r2 = np.random.randint(len(required))
@@ -325,9 +343,11 @@ class Trial(Serializable):
 
         return offspring
 
+
 class Evolution(Serializable):
 
-    def __init__(self, avec, sites, site_types, atom_types, size, generation=0):
+    def __init__(self, avec, sites, site_types, atom_types, size,
+                 generation=0):
         """
         Arguments:
           avec (2d array/list)   lattice vectors
@@ -377,7 +397,7 @@ class Evolution(Serializable):
 
         # pymatgen specific
         struc = Poscar.from_file(sitesfile).structure
-        avec  = struc.lattice.matrix
+        avec = struc.lattice.matrix
         sites = np.array(struc.frac_coords)
         site_types = np.array([species.symbol for species in struc.species])
 
@@ -388,8 +408,8 @@ class Evolution(Serializable):
         evo.paramfile = paramfile
 
         for name in params['sublattices']:
-            occupation  = params['sublattices'][name]
-            site_index = (evo.site_types==name)
+            occupation = params['sublattices'][name]
+            site_index = (evo.site_types == name)
             evo.add_sublattice(name, occupation, site_index)
 
         if 'initial_population' in params:
@@ -397,7 +417,7 @@ class Evolution(Serializable):
                 print " Adding trial structure from file: {}".format(filename)
                 # pymatgen specific
                 struc = Poscar.from_file(filename).structure
-                avec  = struc.lattice.matrix
+                avec = struc.lattice.matrix
                 sites = np.array(struc.frac_coords)
                 types = np.array([species.symbol for species in struc.species])
                 evo.add_trial(avec, sites, types)
@@ -415,7 +435,7 @@ class Evolution(Serializable):
     @classmethod
     def from_JSON(cls, string_or_fp):
 
-        if isinstance(string_or_fp,file):
+        if isinstance(string_or_fp, file):
             entries = json.load(string_or_fp)
         else:
             entries = json.loads(string_or_fp)
@@ -442,7 +462,7 @@ class Evolution(Serializable):
         return evo
 
     def __str__(self):
-        s  = "\n Instance of Evolution\n\n"
+        s = "\n Instance of Evolution\n\n"
         if self.paramfile is not None:
             s += " Parameters from  : {}\n".format(self.paramfile)
         if self.sitesfile is not None:
@@ -495,7 +515,6 @@ class Evolution(Serializable):
         fitness = [trial.fitness for trial in self.evaluated_trials]
         return np.max(fitness)
 
-
     def sublattice_of_site(self, isite):
         """
         Return sublattice ID of site ISITE.
@@ -508,7 +527,8 @@ class Evolution(Serializable):
         Return list of tuples (ID, fitness) of the N best trials found so far.
         """
         return [(t, self.fitness_history[t]) for t in
-                sorted(self.fitness_history, key=self.fitness_history.get)[0:N]]
+                sorted(self.fitness_history,
+                       key=self.fitness_history.get)[0:N]]
 
     def update_parameters(self, paramfile):
         """
@@ -524,12 +544,13 @@ class Evolution(Serializable):
         sitesfile = params['sites']
 
         if (self.sitesfile != sitesfile):
-            print "Warning: the name of the sites file has changed."
-            print "         The new file will be ignored!"
+            print("Warning: the name of the sites file has changed.")
+            print("         The new file will be ignored!")
 
         if (len(params['sublattices']) != self.nsublattices):
-            print "Warning: the number of sub-lattices in the input file has changed."
-            print "         This update will be ignored!"
+            print("Warning: the number of sub-lattices in the input "
+                  "file has changed.")
+            print("         This update will be ignored!")
 
         self.paramfile = paramfile
 
@@ -571,7 +592,7 @@ class Evolution(Serializable):
 
         for i1 in range(len(sites)):
             s1 = sites[i1]
-            d_min  = np.linalg.norm(self.avec[0])
+            d_min = np.linalg.norm(self.avec[0])
             d_min += np.linalg.norm(self.avec[1])
             d_min += np.linalg.norm(self.avec[2])
             isub_min = -1
@@ -592,7 +613,8 @@ class Evolution(Serializable):
                     sys.stderr.write("Error: overlapping sites detected.\n")
                     raise IncompatibleTrialsException
             else:
-                sys.stderr.write("Error: incompatible trial structure skipped.\n")
+                sys.stderr.write(
+                    "Error: incompatible trial structure skipped.\n")
                 raise IncompatibleTrialsException
 
         self.trials.append(Trial(decorations))
@@ -615,9 +637,9 @@ class Evolution(Serializable):
             coo = self.sites[idx]
             coo = coo[trial.site_index(i)]
             coords += list(coo)
-            types  += list(trial.site_types(i))
+            types += list(trial.site_types(i))
         coords = np.array(coords)
-        types  = np.array(types)
+        types = np.array(types)
 
         if sort:
             coords_sorted = []
@@ -776,7 +798,7 @@ class Evolution(Serializable):
             fit_min = fitness[rank[0]]   # best
             fit_max = fitness[rank[-1]]  # worst
             score = [fit_max - fit_min]
-            for i in range(1,self.ntrials):
+            for i in range(1, self.ntrials):
                 score.append(fit_max - self.trials[i].fitness + score[i-1])
             # (2) select trials
             r = np.random.random()*score[-1]
@@ -830,7 +852,7 @@ class Evolution(Serializable):
             trial.mutate(mutate)
             # (4) add to new generation, if the trial is truely new
             if ((trial.id not in self.fitness_history) and
-                (trial.id not in [t.id for t in new_generation])):
+                    (trial.id not in [t.id for t in new_generation])):
                 new_generation.append(trial)
                 ntry = 0
             else:
