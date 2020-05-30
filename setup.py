@@ -3,15 +3,15 @@ from codecs import open
 import os
 import glob
 
-__author__ = "Alexander Urban"
-__email__ = "aurban@atomistic.net"
+__author__ = "Alexander Urban, Nongnuch Artrith"
+__email__ = "aurban@atomistic.net, nartrith@atomistic.net"
 
 here = os.path.abspath(os.path.dirname(__file__))
 package_name = 'aevo'
 package_description = 'Atomistic evolution'
 
 # Get the long description from the README file
-with open(os.path.join(here, 'README.rst'), encoding='utf-8') as fp:
+with open(os.path.join(here, 'README.md'), encoding='utf-8') as fp:
     long_description = fp.read()
 
 # Get version number from the VERSION file

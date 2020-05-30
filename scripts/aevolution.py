@@ -13,7 +13,7 @@ import glob
 
 import aevo
 
-__author__ = "Alexander Urban"
+__author__ = "Alexander Urban, Nongnuch Artrith"
 __date__ = "2014-03-03"
 
 
