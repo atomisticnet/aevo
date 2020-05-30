@@ -1,0 +1,13 @@
+{
+    "size"   : 15,
+    "keep"   : 4,
+    "mutate" : 0.1,
+    "sites"  : "LiNiO2-4x4x1.vasp",
+    "atom_types" : [ "Li", "Ni", "Mn", "O" ],
+    "sublattices" : {
+        "A" : { "Li": 8 },
+        "B" : { "Ni": 8, "Mn": 8 },
+        "C" : { "O": 32 }
+    },
+    "initial_population" : []
+}
