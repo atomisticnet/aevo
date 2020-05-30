@@ -39,7 +39,6 @@ class NoNewTrialsException(Exception):
 
 
 class Serializable(object):
-
     def to_JSON(self):
         def serialize(o):
             if hasattr(o, '__dict__'):
@@ -47,7 +46,7 @@ class Serializable(object):
             else:
                 try:
                     return o.tolist()
-                except:
+                except AttributeError:
                     return o
         return json.dumps(self, default=serialize, sort_keys=True, indent=4)
 
@@ -168,7 +167,7 @@ class Trial(Serializable):
     def __eq__(self, other):
         try:
             return self.id == other.id
-        except:
+        except AttributeError:
             return False
 
     def __ne__(self, other):
@@ -188,7 +187,7 @@ class Trial(Serializable):
 
     @property
     def id(self):
-        return hashlib.md5(str(self.decorations)).hexdigest()
+        return hashlib.md5(str(self.decorations).encode()).hexdigest()
 
     @property
     def nsublattices(self):
@@ -414,7 +413,7 @@ class Evolution(Serializable):
 
         if 'initial_population' in params:
             for filename in params['initial_population']:
-                print " Adding trial structure from file: {}".format(filename)
+                print(" Adding trial structure from file: {}".format(filename))
                 # pymatgen specific
                 struc = Poscar.from_file(filename).structure
                 avec = struc.lattice.matrix
@@ -423,7 +422,7 @@ class Evolution(Serializable):
                 evo.add_trial(avec, sites, types)
                 if (evo.ntrials >= size):
                     break
-            print
+            print()
 
         for i in range(size-evo.ntrials):
             evo.trials.append(Trial.from_sublattices(evo.sublattices))
@@ -434,8 +433,7 @@ class Evolution(Serializable):
 
     @classmethod
     def from_JSON(cls, string_or_fp):
-
-        if isinstance(string_or_fp, file):
+        if hasattr(string_or_fp, 'read'):
             entries = json.load(string_or_fp)
         else:
             entries = json.loads(string_or_fp)
@@ -672,7 +670,7 @@ class Evolution(Serializable):
 
         if filename is None:
             filename = directory + os.sep + 'POSCAR-{}.vasp'.format(trial.id)
-        print "   writing file: {}".format(filename)
+        print("   writing file: {}".format(filename))
 
         # pymatgen specific
         s = mg.Structure(lattice=self.avec, species=types, coords=coords)
@@ -689,8 +687,8 @@ class Evolution(Serializable):
           frmt (str)        atomic structure file format
         """
 
-        print " Writing non-evaluated trial structures to files."
-        print
+        print(" Writing non-evaluated trial structures to files.")
+        print()
 
         if directory is None:
             directory = 'generation{:05d}'.format(self.generation)
@@ -702,7 +700,7 @@ class Evolution(Serializable):
         for trial in self.unevaluated_trials:
             self.write_trial(trial, directory=directory, frmt=frmt)
 
-        print
+        print()
 
     def write_current_best(self, filename, directory='.', frmt='vasp'):
         """
@@ -714,8 +712,8 @@ class Evolution(Serializable):
           frmt (str)        atomic structure file format
         """
 
-        print " Saving current best trial structures to file."
-        print
+        print(" Saving current best trial structures to file.")
+        print()
 
         # fixme: (1) could be file, not dir (2) racing condition
         if not os.path.exists(directory):
@@ -724,7 +722,7 @@ class Evolution(Serializable):
         self.write_trial(self.best_trial, filename=filename,
                          directory=directory, frmt=frmt)
 
-        print
+        print()
 
     def read_fitness(self, directory=None):
         """
@@ -734,8 +732,8 @@ class Evolution(Serializable):
           directory (str)   path to directory with FITNESS files
         """
 
-        print " Reading fitness values."
-        print
+        print(" Reading fitness values.")
+        print()
 
         if directory is None:
             directory = 'generation{:05d}'.format(self.generation)
@@ -743,14 +741,14 @@ class Evolution(Serializable):
         for trial in self.unevaluated_trials:
             filename = directory + os.sep + 'FITNESS.' + trial.id
             if os.path.exists(filename):
-                print "   reading file: {}".format(filename)
+                print("   reading file: {}".format(filename))
                 with open(filename, 'r') as fp:
                     trial.fitness = float(fp.readline())
                 self.fitness_history[trial.id] = trial.fitness
             else:
-                print "   file not found: {}".format(filename)
+                print("   file not found: {}".format(filename))
 
-        print
+        print()
 
     def select(self, keep=None):
         """
