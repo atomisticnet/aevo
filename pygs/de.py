@@ -6,7 +6,7 @@ Differential Evolution
 An implementation of the differential evolution algorithm [1] to
 identify near-ground-state atomic orderings.
 
-[1] R. Storn and K. Price, J. Global Optim. 11 (1997) 341–359.
+[1] R. Storn and K. Price, J. Global Optim. 11 (1997) 341-359.
 
 """
 
@@ -825,7 +825,8 @@ class Evolution(Serializable):
         if mutate is None:
             mutate = self.mutate
 
-        mutate = min(self.nsites, mutate)
+        if not 0.0 <= mutate <= 1.0:
+            raise ValueError("The mutation rate has to be between 0 and 1.")
 
         # check if population is large enough
         if (self.ntrials < self.size):
